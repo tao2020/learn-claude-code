@@ -31,7 +31,6 @@ import asyncio
 import glob
 import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -39,6 +38,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+# Helpers shared across lessons live in the repo-root common.py.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from common import (  # noqa: E402
+    contains_destructive_command,
+)
 
 DEFAULT_MAX_TOKENS = 8000
 DEFAULT_EVALUATOR_MAX_TOKENS = 512
@@ -52,14 +57,7 @@ ENVIRONMENT_PROMPT = (
 MAX_GOAL_LENGTH = 4000
 CLEAR_ALIASES = {"clear", "stop", "off", "reset", "none", "cancel"}
 DENY_LIST = ["rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "dd if="]
-DESTRUCTIVE_COMMAND_WORD = re.compile(
-    r"(?i)(?:^|[;&|()\n])\s*(?:rm|del)(?=\s|$|[;&|()])"
-)
 DESTRUCTIVE = ["rm ", "> /etc/", "chmod 777"]
-
-
-def contains_destructive_command(command: str) -> bool:
-    return bool(DESTRUCTIVE_COMMAND_WORD.search(command))
 
 
 class GoalError(Exception):

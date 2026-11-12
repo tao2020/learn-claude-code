@@ -26,6 +26,7 @@ import glob
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 try:
@@ -36,6 +37,13 @@ except ImportError:
 
 from anthropic import Anthropic
 from dotenv import load_dotenv
+
+# Helpers shared across lessons live in the repo-root common.py.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import common  # noqa: E402
+from common import (  # noqa: E402
+    contains_destructive_command,
+)
 
 load_dotenv(override=True)
 if os.getenv("ANTHROPIC_BASE_URL"):
@@ -82,23 +90,11 @@ def run_bash(command: str) -> str:
 
 
 def run_read(path: str, limit: int | None = None) -> str:
-    try:
-        lines = (WORKDIR / path).resolve().read_text(encoding="utf-8").splitlines()
-        if limit and limit < len(lines):
-            lines = lines[:limit] + [f"... ({len(lines) - limit} more lines)"]
-        return "\n".join(lines)
-    except Exception as exc:
-        return f"Error: {exc}"
+    return common.run_read(WORKDIR, path, limit)
 
 
 def run_write(path: str, content: str) -> str:
-    try:
-        target = (WORKDIR / path).resolve()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
-        return f"Wrote {len(content)} bytes to {path}"
-    except Exception as exc:
-        return f"Error: {exc}"
+    return common.run_write(WORKDIR, path, content)
 
 
 def run_edit(path: str, old_text: str, new_text: str) -> str:
@@ -376,14 +372,7 @@ def assemble_system_prompt() -> str:
 
 HOOKS = {"UserPromptSubmit": [], "PreToolUse": [], "PostToolUse": [], "Stop": []}
 DENY_LIST = ["rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "dd if="]
-DESTRUCTIVE_COMMAND_WORD = re.compile(
-    r"(?i)(?:^|[;&|()\n])\s*(?:rm|del)(?=\s|$|[;&|()])"
-)
 DESTRUCTIVE = ["rm ", "> /etc/", "chmod 777"]
-
-
-def contains_destructive_command(command: str) -> bool:
-    return bool(DESTRUCTIVE_COMMAND_WORD.search(command))
 
 
 def register_hook(event: str, callback):

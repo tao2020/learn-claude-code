@@ -28,12 +28,13 @@ import re
 import secrets
 import signal
 import subprocess
+import sys
 import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict
 import yaml
 
 try:
@@ -50,6 +51,18 @@ except ImportError:
 
 from anthropic import Anthropic
 from dotenv import load_dotenv
+
+# Helpers shared across lessons live in the repo-root common.py.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from common import (  # noqa: E402
+    ProtocolState,
+    _last_assistant_text,
+    _worktree_branch,
+    is_valid_agent_name,
+    normalize_mcp_name,
+    should_run_background,
+    validate_worktree_name,
+)
 
 load_dotenv(override=True)
 if os.getenv("ANTHROPIC_BASE_URL"):
@@ -432,16 +445,6 @@ def complete_task(task_id: str, owner: str = "agent") -> str:
 
 WORKTREES_DIR = WORKDIR / ".worktrees"
 WORKTREES_ROOT = WORKTREES_DIR.resolve()
-VALID_WORKTREE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-
-
-def validate_worktree_name(name: str) -> str | None:
-    if not isinstance(name, str) or not VALID_WORKTREE_NAME.fullmatch(name):
-        return ("worktree name must be 1-64 letters, digits, dots, "
-                "underscores, or dashes, and start with a letter or digit")
-    if name in {".", ".."} or ".." in name:
-        return "worktree name cannot contain '..'"
-    return None
 
 
 def _worktree_path(name: str) -> Path:
@@ -451,10 +454,6 @@ def _worktree_path(name: str) -> Path:
             or path == WORKTREES_ROOT):
         raise ValueError(f"Worktree path escapes directory: {name!r}")
     return path
-
-
-def _worktree_branch(name: str) -> str:
-    return f"wt/{name}"
 
 
 def _run_git(args: list[str], cwd: Path | None = None) -> tuple[bool, str]:
@@ -1105,12 +1104,7 @@ def run_todo_write(todos: list) -> str:
 
 MAILBOX_DIR = WORKDIR / ".mailboxes"
 MAILBOX_ROOT = MAILBOX_DIR.resolve()
-VALID_AGENT_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 RESERVED_TEAMMATE_NAMES = {"lead", "agent"}
-
-
-def is_valid_agent_name(name: str) -> bool:
-    return bool(VALID_AGENT_NAME.fullmatch(name))
 
 
 class MessageBus:
@@ -1177,18 +1171,6 @@ plan_request_ids: dict[str, str] = {}
 team_lock = threading.RLock()
 
 # -- Protocol State --
-
-@dataclass
-class ProtocolState:
-    request_id: str
-    type: str
-    sender: str
-    target: str
-    status: str
-    payload: str
-    work_version: int | None = None
-    task_id: str | None = None
-    created_at: float = field(default_factory=time.time)
 
 
 pending_requests: dict[str, ProtocolState] = {}
@@ -1282,15 +1264,6 @@ def claim_next_task(name: str) -> Task | None:
         if result.startswith("Claimed "):
             return load_task(task.id)
     return None
-
-
-def _last_assistant_text(content) -> str:
-    for block in content:
-        if getattr(block, "type", None) == "text":
-            return block.text.strip()
-        if isinstance(block, dict) and block.get("type") == "text":
-            return str(block.get("text", "")).strip()
-    return ""
 
 
 def current_work_identity(owner: str) -> tuple[int, str | None]:
@@ -2288,13 +2261,6 @@ background_results: dict[str, str] = {}
 background_lock = threading.Lock()
 
 
-def should_run_background(tool_name: str, tool_input: dict) -> bool:
-    return (
-        tool_name == "bash"
-        and tool_input.get("run_in_background") is True
-    )
-
-
 def start_background_task(block, handlers: dict) -> str:
     global _bg_counter
     command = block.input.get("command", block.name)
@@ -2666,7 +2632,6 @@ class MCPClient:
 
 
 mcp_clients: dict[str, MCPClient] = {}
-_DISALLOWED_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
 
 # Authorization comes from host configuration, never server descriptions.
 MCP_HOST_POLICY = {
@@ -2675,14 +2640,6 @@ MCP_HOST_POLICY = {
     ("deploy", "status"): "allow",
     ("deploy", "trigger"): "confirm",
 }
-
-
-def normalize_mcp_name(name: str) -> str:
-    """Replace characters outside the model tool-name alphabet."""
-    normalized = _DISALLOWED_CHARS.sub("_", name)
-    if not normalized:
-        raise ValueError("MCP names cannot normalize to an empty string")
-    return normalized
 
 
 def _mock_server_docs() -> MCPClient:

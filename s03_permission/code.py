@@ -33,7 +33,7 @@ Builds on s02 (multi-tool). Usage:
 
 import os
 import re
-import subprocess
+import sys
 from pathlib import Path
 
 try:
@@ -47,6 +47,10 @@ except ImportError:
 
 from anthropic import Anthropic
 from dotenv import load_dotenv
+
+# Helpers shared across lessons live in the repo-root common.py.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import common  # noqa: E402
 
 load_dotenv(override=True)
 if os.getenv("ANTHROPIC_BASE_URL"):
@@ -74,61 +78,23 @@ SYSTEM = (
 # -- From s02: tool implementations --
 
 def run_bash(command: str) -> str:
-    try:
-        r = subprocess.run(command, shell=True, cwd=WORKDIR,
-                           capture_output=True, text=True, errors="replace", timeout=120)
-        out = (r.stdout + r.stderr).strip()
-        return out[:50000] if out else "(no output)"
-    except subprocess.TimeoutExpired:
-        return "Error: Timeout (120s)"
+    return common.run_bash(WORKDIR, command)
 
 
 def run_read(path: str, limit: int | None = None) -> str:
-    try:
-        lines = (WORKDIR / path).resolve().read_text(encoding="utf-8").splitlines()
-        if limit and limit < len(lines):
-            lines = lines[:limit] + [f"... ({len(lines) - limit} more lines)"]
-        return "\n".join(lines)
-    except Exception as e:
-        return f"Error: {e}"
+    return common.run_read(WORKDIR, path, limit)
 
 
 def run_write(path: str, content: str) -> str:
-    try:
-        file_path = (WORKDIR / path).resolve()
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(content, encoding="utf-8")
-        return f"Wrote {len(content)} bytes to {path}"
-    except Exception as e:
-        return f"Error: {e}"
+    return common.run_write(WORKDIR, path, content)
 
 
 def run_edit(path: str, old_text: str, new_text: str) -> str:
-    try:
-        file_path = (WORKDIR / path).resolve()
-        text = file_path.read_text(encoding="utf-8")
-        if old_text not in text:
-            return f"Error: text not found in {path}"
-        file_path.write_text(text.replace(old_text, new_text, 1), encoding="utf-8")
-        return f"Edited {path}"
-    except Exception as e:
-        return f"Error: {e}"
+    return common.run_edit(WORKDIR, path, old_text, new_text)
 
 
 def run_glob(pattern: str) -> str:
-    import glob as g
-    try:
-        matches = sorted({
-            match for match in g.glob(
-                pattern, root_dir=WORKDIR, recursive=True)
-            if (WORKDIR / match).resolve().is_relative_to(WORKDIR)
-        })
-        shown = matches[:200]
-        if len(matches) > 200:
-            shown.append("... (more matches omitted; narrow the pattern)")
-        return "\n".join(shown) if shown else "(no matches)"
-    except Exception as e:
-        return f"Error: {e}"
+    return common.run_glob(WORKDIR, pattern)
 
 
 # -- From s02 (unchanged): tool definitions and dispatch --

@@ -25,8 +25,7 @@ without an update, the harness adds a reminder alongside the tool results.
 import ast
 import json
 import os
-import re
-import subprocess
+import sys
 from pathlib import Path
 
 try:
@@ -37,6 +36,15 @@ except ImportError:
 
 from anthropic import Anthropic
 from dotenv import load_dotenv
+
+# Helpers shared across lessons live in the repo-root common.py.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import common  # noqa: E402
+from common import (  # noqa: E402
+    large_output_hook,
+    log_hook,
+    summary_hook,
+)
 
 load_dotenv(override=True)
 if os.getenv("ANTHROPIC_BASE_URL"):
@@ -63,57 +71,19 @@ SYSTEM = (
 # -- Tool implementations from s02-s04 --
 
 def run_bash(command: str) -> str:
-    try:
-        r = subprocess.run(command, shell=True, cwd=WORKDIR,
-                           capture_output=True, text=True, errors="replace", timeout=120)
-        out = (r.stdout + r.stderr).strip()
-        return out[:50000] if out else "(no output)"
-    except subprocess.TimeoutExpired:
-        return "Error: Timeout (120s)"
+    return common.run_bash(WORKDIR, command)
 
 def run_read(path: str, limit: int | None = None) -> str:
-    try:
-        lines = (WORKDIR / path).resolve().read_text(encoding="utf-8").splitlines()
-        if limit and limit < len(lines):
-            lines = lines[:limit] + [f"... ({len(lines) - limit} more lines)"]
-        return "\n".join(lines)
-    except Exception as e:
-        return f"Error: {e}"
+    return common.run_read(WORKDIR, path, limit)
 
 def run_write(path: str, content: str) -> str:
-    try:
-        file_path = (WORKDIR / path).resolve()
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(content, encoding="utf-8")
-        return f"Wrote {len(content)} bytes to {path}"
-    except Exception as e:
-        return f"Error: {e}"
+    return common.run_write(WORKDIR, path, content)
 
 def run_edit(path: str, old_text: str, new_text: str) -> str:
-    try:
-        file_path = (WORKDIR / path).resolve()
-        text = file_path.read_text(encoding="utf-8")
-        if old_text not in text:
-            return f"Error: text not found in {path}"
-        file_path.write_text(text.replace(old_text, new_text, 1), encoding="utf-8")
-        return f"Edited {path}"
-    except Exception as e:
-        return f"Error: {e}"
+    return common.run_edit(WORKDIR, path, old_text, new_text)
 
 def run_glob(pattern: str) -> str:
-    import glob as g
-    try:
-        matches = sorted({
-            match for match in g.glob(
-                pattern, root_dir=WORKDIR, recursive=True)
-            if (WORKDIR / match).resolve().is_relative_to(WORKDIR)
-        })
-        shown = matches[:200]
-        if len(matches) > 200:
-            shown.append("... (more matches omitted; narrow the pattern)")
-        return "\n".join(shown) if shown else "(no matches)"
-    except Exception as e:
-        return f"Error: {e}"
+    return common.run_glob(WORKDIR, pattern)
 
 
 # -- New in s05: structured state the model updates --
@@ -224,67 +194,12 @@ def trigger_hooks(event: str, *args):
             return result
     return None
 
-DENY_LIST = ["rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "dd if="]
-DESTRUCTIVE_COMMAND_WORD = re.compile(
-    r"(?i)(?:^|[;&|()\n])\s*(?:rm|del)(?=\s|$|[;&|()])"
-)
-DESTRUCTIVE = ["rm ", "> /etc/", "chmod 777"]
-
-
-def contains_destructive_command(command: str) -> bool:
-    return bool(DESTRUCTIVE_COMMAND_WORD.search(command))
-
 
 def permission_hook(block):
-    """PreToolUse: s03 permission logic, registered as an s04 hook."""
-    if block.name == "bash":
-        command = block.input.get("command", "")
-        for pattern in DENY_LIST:
-            if pattern in command:
-                print(f"\n\033[31m[blocked] '{pattern}'\033[0m")
-                return "Permission denied by deny list"
-        if contains_destructive_command(command) or any(
-            keyword in command for keyword in DESTRUCTIVE
-        ):
-            print(f"\n\033[33m[permission] Potentially destructive command\033[0m")
-            print(f"   Tool: {block.name}({block.input})")
-            choice = input("   Allow? [y/N] ").strip().lower()
-            if choice not in ("y", "yes"):
-                return "Permission denied by user"
-    if block.name in ("read_file", "write_file", "edit_file"):
-        path = block.input.get("path", "")
-        if not (WORKDIR / path).resolve().is_relative_to(WORKDIR):
-            print(f"\n\033[33m[permission] Access outside workspace\033[0m")
-            print(f"   Tool: {block.name}({block.input})")
-            choice = input("   Allow? [y/N] ").strip().lower()
-            if choice not in ("y", "yes"):
-                return "Permission denied by user"
-    return None
-
-def log_hook(block):
-    """PreToolUse: log every tool call."""
-    args_preview = str(list(block.input.values())[:2])[:60]
-    print(f"\033[90m[HOOK] {block.name}({args_preview})\033[0m")
-    return None
-
-def large_output_hook(block, output):
-    """PostToolUse: warn on large output."""
-    if len(str(output)) > 100000:
-        print(f"\033[33m[HOOK] Large output from {block.name}: {len(str(output))} chars\033[0m")
-    return None
+    return common.permission_hook(WORKDIR, block)
 
 def context_inject_hook(query: str):
-    """UserPromptSubmit: log working directory."""
-    print(f"\033[90m[HOOK] UserPromptSubmit: working in {WORKDIR}\033[0m")
-    return None
-
-def summary_hook(messages: list):
-    """Stop: print tool call count."""
-    tool_count = sum(1 for m in messages
-                     for b in (m.get("content") if isinstance(m.get("content"), list) else [])
-                     if isinstance(b, dict) and b.get("type") == "tool_result")
-    print(f"\033[90m[HOOK] Stop: session used {tool_count} tool calls\033[0m")
-    return None
+    return common.context_inject_hook(WORKDIR, query)
 
 register_hook("UserPromptSubmit", context_inject_hook)
 register_hook("PreToolUse", permission_hook)
